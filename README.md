@@ -1,189 +1,161 @@
-# Bad Apple!! in a tiny binary
+# bad-apple-tiny
 
-A 64x36 1-bit render of Bad Apple!! embedded in a single executable.
-This is the size-optimised rework: **no liblzma, no malloc, no printf.**
+Bad Apple!! playing as ASCII in a terminal, from a single self-contained
+binary. The video is baked into the executable. No assets, no runtime
+dependencies, no network.
 
-## Results (measured, x86-64 Linux, gcc -Os, stripped)
-
-| variant | payload | binary |
-|---|---:|---:|
-| original (liblzma, .xz payload, dynamic link) | 116 172 | 129 840 |
-| **new, 20 fps, libc** | 113 977 | **125 592** |
-| **new, 20 fps, `make tiny` (no libc)** | 113 977 | **116 976** |
-| new, 15 fps, libc | 90 149 | 101 256 |
-| **new, 15 fps, `make tiny`** | 90 149 | **93 144** |
-
-The original README linked liblzma **statically**, which pulls in the whole
-encoder, every filter (delta, BCJ x86/ARM/SPARC/...), the CRC tables and
-`lzma_index` — that build was ~160 KB. The numbers above use a *dynamic*
-liblzma link as the fairest available baseline, and the rework still wins.
-
-In the `tiny` build the executable is only ~3 KB larger than the compressed
-video itself. There is essentially nothing left to remove but the video.
-
-## What changed
-
-### 1. Raw LZMA1 instead of an .xz container — lossless, -2 195 B
-
-The payload dropped the xz header, CRC64, index and footer, and switched to
-`lc=1 lp=0 pb=0`. Packed 1bpp frames have no 4-byte structure, so the default
-`pb=2` only wastes context bits.
-
-```python
-filters = [{'id': lzma.FILTER_LZMA1, 'preset': 9 | lzma.PRESET_EXTREME,
-            'lc': 1, 'lp': 0, 'pb': 0}]
-blob = lzma.compress(stream, format=lzma.FORMAT_RAW, filters=filters)
-```
-
-### 2. Own LZMA decoder instead of liblzma — the big win
-
-`src/lzma_dec.c` is a ~2 KB minimal LZMA1 decoder. lc/lp/pb are compile-time
-constants, the dictionary is the output buffer itself, so there is no
-allocator, no window wrap-around, no encoder, no filter chain.
-
-It is verified byte-exact against the reference LZMA implementation:
+**96 KB on Windows, 93 KB on Linux** — and it runs on everything from
+Windows XP to Windows 11.
 
 ```
-gcc -O2 -std=gnu99 -Isrc -DVID_LZMA_LC=1 -DVID_LZMA_LP=0 -DVID_LZMA_PB=0 \
-    -o test_decode tools/test_decode.c src/lzma_dec.c
-./test_decode | md5sum      # matches lzma.decompress() exactly
+$ ls -l bad_apple_tiny
+-rwxr-xr-x 1 user user 93208 bad_apple_tiny
 ```
-
-### 3. No printf, no malloc
-
-* the frame counter is formatted by a 10-line `put_u()` instead of dragging in
-  the full printf machinery
-* the 946 KB decode buffer is `static` (.bss), so it costs **zero** file bytes
-  and removes `malloc`/`free`
-* the frame body and the status line are composed into one buffer and flushed
-  with a single `write()` per frame — one syscall instead of several
-
-### 4. `make tiny`: no libc at all
-
-Linux x86-64 only. `-nostdlib -nostartfiles` with a hand-written `_start` and
-inline `syscall` for `write`, `clock_gettime`, `nanosleep` and `exit_group`.
-Saves another ~8.6 KB.
 
 ## Build
 
 ```sh
-make                 # standard build -> ./bad_apple
-make tiny            # no-libc build  -> ./bad_apple_tiny   (Linux x86-64)
-make upx             # optional UPX pass
-make sizes           # print the size table
+make              # Linux, dynamic libc          -> bad_apple      101 KB
+make tiny         # Linux, no libc, raw syscalls -> bad_apple_tiny  93 KB
+make win          # Windows XP..11, 32-bit       -> bad_apple.exe   ~96 KB
+make iso          # wrap the exe into a CD image -> badapple.iso
 ```
 
-Regenerate the payload:
+Windows builds need a 32-bit MinGW (`i686-w64-mingw32-gcc`). Nothing else is
+required anywhere — no liblzma, no Python at build time, no `mkisofs`.
+
+## How it gets that small
+
+| | payload | binary |
+|---|---:|---:|
+| naive approach (liblzma, `.xz` payload) | 116 172 | 129 840 |
+| **this project** | **90 149** | **93 208** |
+
+Four things do the work:
+
+**A hand-written LZMA1 decoder (~2 KB).** Linking liblzma drags in the entire
+encoder, every filter (delta, BCJ x86/ARM/SPARC/...), CRC tables and
+`lzma_index`. Only the decoder is needed, so `src/lzma_dec.c` implements just
+that, from the LZMA specification.
+
+**A raw LZMA1 stream.** No `.xz` container means no header, no CRC64, no index
+and no footer. `lc`/`lp`/`pb` are compile-time constants passed via `-D`, so
+the decoder never reads them from the file.
+
+**Encoder parameters chosen by measurement.** A sweep of all 75 valid
+`lc`/`lp`/`pb` combinations picked `lc=1 lp=0 pb=0`, worth ~2 KB over the
+defaults. Frames are 1 bit per pixel, 288 bytes each.
+
+**No libc.** No `malloc` (the decode buffer is `.bss`, or `VirtualAlloc` on
+Windows), no `printf` (integers are formatted by hand), one write syscall per
+frame. `make tiny` drops libc entirely and talks to the kernel directly.
+
+## Things that sounded clever and made it bigger
+
+Every inter-frame trick was measured against plain LZMA. All of them lost —
+LZMA already finds those redundancies with its match finder, and the transforms
+just destroy literal context:
+
+| transform | payload | vs baseline |
+|---|---:|---:|
+| **none** | **90 149** | — |
+| XOR with previous frame | 156 215 | +73% |
+| bit-plane / planar layout | 123 019 | +36% |
+| vertical 1x8 pixel packing | 126 784 | +41% |
+| serpentine scan order | 127 848 | +42% |
+| per-frame RLE | 113 920 | +26% |
+| bzip2 instead of LZMA | 166 970 | +85% |
+
+The payload is at its entropy floor. Below this, the only lever is the video
+itself.
+
+## Trading quality for size
 
 ```sh
-python3 tools/convert.py bad_apple.mp4 --fps 20      # from a video file
-python3 tools/reencode.py old_video_data.h --fps 15  # from an old header
+python3 tools/reencode.py src/video_data.h --fps 12 --out src/video_data.h
 ```
 
-## Windows XP support
+| resolution / fps | payload |
+|---|---:|
+| 64x36 @ 20 | 113 977 |
+| **64x36 @ 15 (default)** | **90 149** |
+| 64x36 @ 12 | 75 376 |
+| 48x27 @ 20 | 75 754 |
+| 64x36 @ 10 | 65 150 |
+| 48x27 @ 12 | 50 915 |
+| 32x18 @ 20 | 42 597 |
 
-`src/main.c` builds one executable that runs on **Windows XP through
-Windows 11**. The renderer is picked at runtime:
+Add ~3 KB of code to any payload to get the binary size. To start from a video
+file instead, use `tools/convert.py input.mp4 --fps 15`.
 
-* `SetConsoleMode(h, ... | ENABLE_VIRTUAL_TERMINAL_PROCESSING)` is probed.
-  It succeeds on Windows 10 1511+ and the fast ANSI path is used (one
-  `WriteFile` per frame).
-* On XP the call fails, so the classic Console API path runs instead:
-  `WriteConsoleOutputCharacterA` writes straight into the screen buffer.
-  It never moves the cursor and never scrolls, so no newlines are emitted
-  and there is *less* flicker than on the ANSI path.
-* `\033[?25l` is replaced by `SetConsoleCursorInfo`, `\033[2J` by
-  `FillConsoleOutputCharacterA`.
-* Console window/buffer resizing order was fixed: the window is shrunk
-  *before* the buffer, because a buffer may never be smaller than its
-  window. The original order failed silently.
-* `timeBeginPeriod(1)` is loaded dynamically from `winmm.dll`, because XP's
-  default `Sleep()` granularity of ~15.6 ms is very visible at 20 fps. The
-  import table stays kernel32-only.
+## Windows notes
 
-The LZMA decoder is portable C with no syscalls and no 64-bit assumptions,
-so it builds unchanged for 32-bit Windows.
+One executable covers XP through 11, because the renderer is chosen at runtime
+rather than at compile time:
 
-### UCRT vs msvcrt: why `make win` is freestanding
-
-A UCRT-based MinGW (MSYS2 UCRT64, and the default on several distros) links
-the CRT startup against the Universal CRT and the exe then dies on XP with:
-
-```
-This application has failed to start because
-api-ms-win-crt-environment-l1-1-0.dll was not found.
+```c
+if (SetConsoleMode(h, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING))
+        g_vt = 1;   /* Windows 10 1511+: ANSI, one WriteFile per frame */
+/* otherwise: XP, WriteConsoleOutputCharacterA straight into the buffer */
 ```
 
-Those `api-ms-win-crt-*.dll` forwarders do not exist before Windows 10.
-
-Since this program already avoids `malloc`, `printf` and every other libc
-facility, `make win` simply drops the CRT entirely: `-nostdlib
--nostartfiles`, a hand-written `mainCRTStartup`, local `memset`/`memcpy`, and
-`-lkernel32` as the only import. The resulting exe has **one** DLL dependency,
-`kernel32.dll`, which has existed since Windows NT 3.1, so the CRT flavour of
-your toolchain stops mattering.
-
-`QueryPerformanceCounter` was also swapped for `GetTickCount`: the former
-needs a 64-bit division, which would pull `__udivdi3` out of libgcc. With
-`timeBeginPeriod(1)` already active, `GetTickCount` gives ~1 ms resolution,
-and a 165 s video cannot overflow a 32-bit millisecond counter.
-
-```sh
-make win     # -> bad_apple.exe  freestanding, kernel32 only (recommended)
-make win-crt # -> bad_apple.exe  ordinary CRT build, needs msvcrt MinGW
-make iso     # -> badapple.iso   pure Python, no mkisofs needed
-```
-
-Verify the imports before copying it over:
+The build is freestanding: `-nostdlib`, a hand-written `mainCRTStartup`, and
+`kernel32.dll` as the only import. This is not just for size — a UCRT-based
+MinGW would otherwise emit `api-ms-win-crt-*.dll` imports, which do not exist
+before Windows 10.
 
 ```sh
 i686-w64-mingw32-objdump -p bad_apple.exe | grep 'DLL Name'
-# DLL Name: KERNEL32.dll      <- this line and nothing else
+# DLL Name: KERNEL32.dll     <- this line and nothing else
 ```
 
-`make tiny` is Linux-only and does not apply to Windows.
+Other XP-specific details: the console window is shrunk *before* the buffer (a
+buffer may never be smaller than its window), `timeBeginPeriod(1)` is loaded
+dynamically from `winmm.dll` to fix the ~15.6 ms `Sleep` granularity, and
+timing uses `GetTickCount` so no 64-bit division pulls in libgcc.
 
-## Getting the exe into a VM
+**Do not add `-Wl,--section-alignment=512`.** It looks like free space, but ld
+emits an inconsistent header for sub-page alignment and Windows rejects the
+image with `is not a valid Win32 application` — the same message it shows for
+a 64-bit exe, which makes it easy to misdiagnose. `make win-small` keeps the
+safe part of that idea (dropping `.reloc` and the NX/ASLR bits) for ~2 KB.
 
-`tools/make_iso.py` writes a plain ISO-9660 image with no external tools:
+## Running it in a VM
+
+`tools/make_iso.py` is a small pure-Python ISO-9660 writer, so no `xorriso` or
+`genisoimage` is needed:
 
 ```sh
-python3 tools/make_iso.py -o badapple.iso -V BADAPPLE bad_apple.exe
+make iso
 ```
 
 Attach it to QEMU as a second CD drive:
 
 ```sh
--drive file=badapple.iso,media=cdrom,index=2
+qemu-system-x86_64 -enable-kvm -m 1024 \
+  -drive file=disk.qcow2,format=qcow2,if=ide,index=0 \
+  -drive file=badapple.iso,media=cdrom,index=3
 ```
 
-## Ideas that were measured and rejected
+Or swap the disc without restarting the VM, from the QEMU monitor
+(`Ctrl+Alt+2`):
 
-Every "smart" inter-frame scheme makes the file **bigger**. LZMA already has a
-64 MB dictionary and simply matches entire previous frames; delta coding
-destroys those long matches.
+```
+change ide1-cd0 /path/to/badapple.iso raw
+```
 
-| scheme | payload | vs 113 977 |
-|---|---:|---:|
-| XOR delta between frames | 156 215 | +37% |
-| bit run-length + LZMA | 126 907 | +11% |
-| column-major transpose | 124 527 | +9% |
-| dedup identical frames + index | 117 486 | +3% |
-| row-diff (flags + payload) | 120 957 | +6% |
-| frame-level RLE | 113 920 | -0.05% |
-| bzip2 | 166 970 | +47% |
+## Layout
 
-## Quality/size trade-offs
+```
+src/main.c          player, platform layer (Linux syscalls / Win32 console)
+src/lzma_dec.c      minimal LZMA1 decoder, ~2 KB of code
+src/video_data.h    generated: the compressed video
+tools/convert.py    video file -> video_data.h
+tools/reencode.py   video_data.h -> video_data.h, at a lower fps
+tools/make_iso.py   files -> ISO-9660 image
+tools/test_decode.c checks the C decoder against Python's lzma module
+```
 
-If you want to go below 90 KB, the only remaining lever is the video itself:
+## License
 
-| resolution / fps | payload |
-|---|---:|
-| 64x36 @ 20 fps (default) | 113 977 |
-| 64x36 @ 15 fps | 90 149 |
-| 64x36 @ 12 fps | 75 376 |
-| 48x27 @ 20 fps | 75 754 |
-| 64x36 @ 10 fps | 65 150 |
-| 40x22 @ 20 fps | 57 523 |
-| 48x27 @ 12 fps | 50 915 |
-| 32x18 @ 20 fps | 42 597 |
+MIT.

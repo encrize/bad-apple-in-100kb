@@ -32,7 +32,7 @@ TINYLDFLAGS = $(LDFLAGS) -Wl,-n
 SRC = src/main.c src/lzma_dec.c
 DEPS = src/video_data.h src/lzma_dec.h
 
-.PHONY: all tiny win win-crt iso upx sizes data clean
+.PHONY: all tiny win win-small win-crt iso upx sizes data clean
 
 all: bad_apple
 
@@ -58,14 +58,31 @@ WINCFLAGS = -Os -std=gnu99 -Isrc $(LZMA_DEFS) -D_WIN32_WINNT=0x0501 \
 # so it does not matter whether your MinGW is UCRT- or msvcrt-based.
 # A UCRT toolchain would otherwise emit api-ms-win-crt-*.dll imports, which
 # do not exist before Windows 10.
+# Known-good link flags. Do NOT add -Wl,--section-alignment=512 here: the
+# Windows loader validates section virtual addresses against SizeOfImage, ld
+# emits an inconsistent header for sub-page alignment, and XP rejects the
+# result with "is not a valid Win32 application". Verified the hard way.
+WINLDFLAGS = -s -Wl,--gc-sections
+
 win: $(SRC) $(DEPS)
 	$(WINCC) $(WINCFLAGS) -DNOLIBC -nostdlib -nostartfiles -mconsole \
-	         -s -Wl,--gc-sections -o bad_apple.exe $(SRC) \
+	         $(WINLDFLAGS) -o bad_apple.exe $(SRC) \
 	         -lkernel32 -static-libgcc -lgcc
+
+# Experimental: shaves a couple of KB of PE bookkeeping. These flags only
+# clear DllCharacteristics bits and drop .reloc, which an EXE with a fixed
+# ImageBase does not need, so they are far less risky than a sub-page
+# section alignment. Still: test the result in the VM before relying on it.
+win-small: $(SRC) $(DEPS)
+	$(WINCC) $(WINCFLAGS) -DNOLIBC -nostdlib -nostartfiles -mconsole \
+	         $(WINLDFLAGS) -Wl,--file-alignment=512 \
+	         -Wl,--disable-reloc-section -Wl,--disable-nxcompat \
+	         -Wl,--disable-dynamicbase \
+	         -o bad_apple.exe $(SRC) -lkernel32 -static-libgcc -lgcc
 
 # Fallback: ordinary CRT build. Needs an msvcrt-based (NOT UCRT) MinGW.
 win-crt: $(SRC) $(DEPS)
-	$(WINCC) $(WINCFLAGS) -mconsole -s -Wl,--gc-sections \
+	$(WINCC) $(WINCFLAGS) -mconsole $(WINLDFLAGS) \
 	         -o bad_apple.exe $(SRC)
 
 iso: bad_apple.exe

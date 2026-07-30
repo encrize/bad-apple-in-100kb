@@ -28,11 +28,28 @@ def parse_old_header(path):
             sys.exit("missing #define %s in %s" % (name, path))
         return int(m.group(1))
 
+    def opt(name):
+        m = re.search(r"#define\s+%s\s+(\d+)" % name, src)
+        return int(m.group(1)) if m else None
+
     w, h, fps, frames, bpf = (d("VID_WIDTH"), d("VID_HEIGHT"), d("VID_FPS"),
                               d("VID_FRAMES"), d("VID_FRAME_BYTES"))
     body = src.split("video_data[VID_DATA_SIZE] = {", 1)[1]
     blob = bytes(int(x, 16) for x in re.findall(r"0x([0-9A-Fa-f]{2})", body))
-    raw = lzma.decompress(blob)
+
+    # Two input flavours are accepted, so this script can be re-run on its own
+    # output (e.g. to drop fps a second time):
+    #   - the original project's header, which holds an .xz container
+    #   - a header we generated, which holds a raw LZMA1 stream and therefore
+    #     carries VID_LZMA_LC/LP/PB defines describing how to decode it
+    lc, lp, pb = opt("VID_LZMA_LC"), opt("VID_LZMA_LP"), opt("VID_LZMA_PB")
+    if lc is None:
+        raw = lzma.decompress(blob)
+    else:
+        dec = lzma.LZMADecompressor(
+            format=lzma.FORMAT_RAW,
+            filters=[{"id": lzma.FILTER_LZMA1, "lc": lc, "lp": lp, "pb": pb}])
+        raw = dec.decompress(blob)
     if len(raw) != frames * bpf:
         sys.exit("unexpected payload: %d != %d" % (len(raw), frames * bpf))
     return w, h, fps, frames, bpf, raw, len(blob)
