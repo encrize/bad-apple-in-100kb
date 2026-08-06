@@ -4,7 +4,7 @@ Bad Apple!! playing as ASCII in a terminal, from a single self-contained
 binary. The video is baked into the executable. No assets, no runtime
 dependencies, no network.
 
-**96 KB on Windows, 93 KB on Linux** — and it runs on everything from
+**96 KB on Windows, 93 KB on Linux** - and it runs on everything from
 Windows XP to Windows 11.
 
 ```
