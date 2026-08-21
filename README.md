@@ -1,10 +1,29 @@
+<div align="center">
+
 # bad-apple-tiny
 
-Bad Apple!! playing as ASCII in a terminal, from a single self-contained
-binary. The video is baked into the executable. No assets, no runtime
-dependencies, no network.
+**Bad Apple!! playing as ASCII in your terminal — from one tiny, self-contained binary.**
 
-**96 KB on Windows, 93 KB on Linux** - and it runs on everything from
+<p>
+  <img alt="Language: C" src="https://img.shields.io/badge/C-native%20code-A8B9CC?style=for-the-badge&logo=c&logoColor=white">
+  <img alt="Linux" src="https://img.shields.io/badge/Linux-93%20KB-FCC624?style=for-the-badge&logo=linux&logoColor=black">
+  <img alt="Windows" src="https://img.shields.io/badge/Windows-96%20KB-0078D4?style=for-the-badge&logo=windows&logoColor=white">
+</p>
+<p>
+  <img alt="Zero dependencies" src="https://img.shields.io/badge/dependencies-none-46A171?style=flat-square">
+  <img alt="No network" src="https://img.shields.io/badge/network-not%20required-2783DE?style=flat-square">
+  <img alt="MIT License" src="https://img.shields.io/badge/license-MIT-2C2C2B?style=flat-square">
+</p>
+
+<sub>Video baked in · No assets · No runtime dependencies · Windows XP → 11</sub>
+
+</div>
+
+---
+
+The entire video is baked into the executable. Just run it and watch the terminal come alive.
+
+**96 KB on Windows, 93 KB on Linux** — and it runs on everything from
 Windows XP to Windows 11.
 
 ```

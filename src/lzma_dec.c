@@ -5,9 +5,6 @@
  */
 #include "lzma_dec.h"
 
-/* lc/lp/pb come from the Makefile (-DVID_LZMA_LC=...) so this translation
- * unit never pulls in the multi-hundred-KB video_data.h array. */
-
 #ifndef VID_LZMA_LC
 #define VID_LZMA_LC 1
 #endif
@@ -236,7 +233,7 @@ int lzma_raw_decode(const unsigned char *in, unsigned long in_size,
 					rep0 += (direct(nd - kAlignBits) << kAlignBits) +
 					        rtree(P.Align, kAlignBits);
 				if (rep0 == 0xFFFFFFFFu)
-					break; /* end marker */
+					break; 
 			}
 		}
 

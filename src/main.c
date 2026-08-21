@@ -1,15 +1,3 @@
-/* Bad Apple!! in a tiny binary.
- *
- * No liblzma, no malloc, no printf. The decoded frame buffer lives in .bss
- * (costs nothing in the file), and each frame is pushed out with a single
- * write per frame.
- *
- * Windows: works on XP through Windows 11. ANSI escape sequences are used
- * when the console supports them (Windows 10 1511+), otherwise the code falls
- * back to the classic Console API, which is what Windows XP needs.
- *
- * Build NOLIBC=1 on x86-64 Linux to drop libc entirely (raw syscalls).
- */
 #include "video_data.h"
 #include "lzma_dec.h"
 
@@ -17,10 +5,8 @@
 #define FRAME_US  (1000000L / VID_FPS)
 #define CELLS     (VID_WIDTH * VID_HEIGHT)
 
-/* composed output buffer: frame rows + newlines + status line */
 static char obuf[(VID_WIDTH + 1) * VID_HEIGHT + 64];
 
-/* unsigned -> decimal, returns digits written. Replaces printf("%d"). */
 static unsigned put_u(char *d, unsigned v)
 {
 	char t[10];
@@ -44,24 +30,19 @@ static unsigned put_s(char *d, const char *s)
 	return n;
 }
 
-/* ------------------------------------------------------------------ */
-/* platform layer                                                      */
-/* ------------------------------------------------------------------ */
-
 #if defined(_WIN32)
 
 #ifndef _WIN32_WINNT
-#define _WIN32_WINNT 0x0501     /* Windows XP */
+#define _WIN32_WINNT 0x0501     
 #endif
 #include <windows.h>
 
-/* Missing from pre-Windows-10 SDK headers */
 #ifndef ENABLE_VIRTUAL_TERMINAL_PROCESSING
 #define ENABLE_VIRTUAL_TERMINAL_PROCESSING 0x0004
 #endif
 
 static HANDLE g_out;
-static int g_vt;                /* 1 = console understands ANSI escapes */
+static int g_vt;               
 
 typedef MMRESULT (WINAPI *TIMEPERIODFN)(UINT);
 static TIMEPERIODFN g_tbp, g_tep;
@@ -83,8 +64,6 @@ static void plat_init(void)
 
 	g_out = GetStdHandle(STD_OUTPUT_HANDLE);
 
-	/* Shrink the WINDOW first, then the BUFFER. The buffer may never be
-	 * smaller than the window, so the original order failed silently. */
 	rect.Left = 0;
 	rect.Top = 0;
 	rect.Right = 0;
@@ -92,20 +71,19 @@ static void plat_init(void)
 	SetConsoleWindowInfo(g_out, TRUE, &rect);
 
 	size.X = VID_WIDTH;
-	size.Y = VID_HEIGHT + 1;    /* frame + status line, no scrollback */
+	size.Y = VID_HEIGHT + 1;   
 	SetConsoleScreenBufferSize(g_out, size);
 
 	rect.Right = (SHORT)(size.X - 1);
 	rect.Bottom = (SHORT)(size.Y - 1);
 	SetConsoleWindowInfo(g_out, TRUE, &rect);
 
-	/* Probe for ANSI support. Fails on XP/Vista/7/8 -> use Console API. */
 	g_vt = 0;
 	if (GetConsoleMode(g_out, &mode)) {
 		if (SetConsoleMode(g_out, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING))
 			g_vt = 1;
 	} else {
-		g_vt = 1;   /* redirected to a file/pipe: emit escapes as-is */
+		g_vt = 1;   
 	}
 
 	ci.dwSize = 25;
@@ -122,8 +100,6 @@ static void plat_init(void)
 		                            home, &written);
 	}
 
-	/* Sleep() granularity is ~15.6 ms by default, which is visible at 20 fps.
-	 * Load winmm dynamically so the import table stays at kernel32 only. */
 	winmm = LoadLibraryA("winmm.dll");
 	if (winmm) {
 		g_tbp = (TIMEPERIODFN)GetProcAddress(winmm, "timeBeginPeriod");
@@ -152,9 +128,6 @@ static void plat_present(const char *cells, const char *status, unsigned slen)
 		return;
 	}
 
-	/* Windows XP path: write straight into the screen buffer. This never
-	 * moves the cursor and never scrolls, so there are no newlines and no
-	 * flicker. Buffer width == VID_WIDTH, so rows wrap on their own. */
 	{
 		DWORD written;
 		COORD at;
@@ -180,11 +153,6 @@ static void plat_shutdown(void)
 		g_tep(1);
 }
 
-/* GetTickCount instead of QueryPerformanceCounter: it needs no 64-bit
- * division (which would drag __udivdi3 out of libgcc in the freestanding
- * build), it lives in kernel32, and timeBeginPeriod(1) already brought its
- * resolution down to ~1 ms. The whole video is ~165 s, so 32-bit ms cannot
- * overflow mid-playback. */
 static DWORD g_t0;
 
 static void clock_start(void)
@@ -207,7 +175,7 @@ static void plat_exit(int c)
 	ExitProcess((UINT)c);
 }
 
-#else   /* ------------------------------ POSIX ------------------------- */
+#else   
 
 #if defined(NOLIBC)
 
@@ -309,7 +277,7 @@ static void plat_exit(int c)
 	_exit(c);
 }
 
-#endif  /* NOLIBC */
+#endif 
 
 static void plat_init(void)
 {
@@ -338,22 +306,8 @@ static void plat_shutdown(void)
 	plat_write("\033[?25h\n", 7);
 }
 
-#endif  /* _WIN32 */
+#endif  
 
-/* ------------------------------------------------------------------ */
-
-/* The 946 KB decode buffer.
- *
- * On ELF a plain .bss array costs zero file bytes. On PE it is not that
- * simple: with -fdata-sections gcc emits it as an orphan `.bss.raw` section,
- * and the PE linker does not recognise orphans as uninitialised, so it writes
- * out 946 KB of zeros into the exe. That is exactly how a 125 KB binary
- * turned into 1.02 MB on Windows.
- *
- * VirtualAlloc sidesteps the whole question: the buffer does not exist in the
- * image at all, and VirtualAlloc lives in kernel32, so the freestanding build
- * stays CRT-free. Pages come back zeroed.
- */
 #if defined(_WIN32)
 static unsigned char *raw;
 
@@ -428,13 +382,8 @@ void _start(void)
 #endif
 
 #if defined(NOLIBC) && defined(_WIN32)
-/* Freestanding Windows build: no CRT at all, only kernel32.dll.
- *
- * This is what makes the exe run on Windows XP no matter which MinGW you
- * have. A UCRT-based toolchain would otherwise emit an import for
- * api-ms-win-crt-*.dll, which simply does not exist before Windows 10. */
 
-void __main(void) {}       /* gcc emits a call to this at the top of main() */
+void __main(void) {}       
 
 void *memset(void *d, int c, size_t n)
 {
@@ -453,7 +402,6 @@ void *memcpy(void *d, const void *s, size_t n)
 	return d;
 }
 
-/* Default PE entry point for a console app; no -e flag needed. */
 void mainCRTStartup(void)
 {
 	plat_exit(main());

@@ -10,7 +10,6 @@
 
 CC      ?= gcc
 UPX     ?= upx
-# 32-bit MinGW keeps Windows XP happy; i686-w64-mingw32-gcc on most distros
 WINCC   ?= i686-w64-mingw32-gcc
 FPS     ?= 0            # 0 = keep source fps, or set e.g. FPS=15
 OLDHDR  ?= src/video_data.h
@@ -26,7 +25,6 @@ CFLAGS  = -Os -std=gnu99 -Isrc $(LZMA_DEFS) \
 LDFLAGS = -s -Wl,--gc-sections -Wl,--build-id=none -Wl,-z,norelro \
           -Wl,--hash-style=sysv
 
-# -n (--nmagic) drops page alignment; only usable in the no-libc static build
 TINYLDFLAGS = $(LDFLAGS) -Wl,-n
 
 SRC = src/main.c src/lzma_dec.c
@@ -40,28 +38,16 @@ bad_apple: $(SRC) $(DEPS)
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(SRC)
 	@strip --strip-all --remove-section=.comment --remove-section=.note $@ 2>/dev/null || true
 
-# No libc, no crt, no dynamic loader. Linux x86-64 only.
 tiny: $(SRC) $(DEPS)
 	$(CC) $(CFLAGS) -DNOLIBC -nostdlib -nostartfiles -static \
 	      $(TINYLDFLAGS) -o bad_apple_tiny $(SRC)
 	@strip --strip-all --remove-section=.comment --remove-section=.note bad_apple_tiny 2>/dev/null || true
 
-# NOTE: no -fdata-sections here, unlike the Linux CFLAGS. On PE it emits
-# orphan .bss.<var> sections that the linker writes into the file as real
-# zero bytes instead of treating them as uninitialised data.
 WINCFLAGS = -Os -std=gnu99 -Isrc $(LZMA_DEFS) -D_WIN32_WINNT=0x0501 \
             -ffreestanding -ffunction-sections \
             -fno-unwind-tables -fno-asynchronous-unwind-tables \
             -fno-stack-protector -fomit-frame-pointer -fno-ident
 
-# Windows XP and later. Freestanding: no CRT at all, imports kernel32 only,
-# so it does not matter whether your MinGW is UCRT- or msvcrt-based.
-# A UCRT toolchain would otherwise emit api-ms-win-crt-*.dll imports, which
-# do not exist before Windows 10.
-# Known-good link flags. Do NOT add -Wl,--section-alignment=512 here: the
-# Windows loader validates section virtual addresses against SizeOfImage, ld
-# emits an inconsistent header for sub-page alignment, and XP rejects the
-# result with "is not a valid Win32 application". Verified the hard way.
 WINLDFLAGS = -s -Wl,--gc-sections
 
 win: $(SRC) $(DEPS)
@@ -69,10 +55,6 @@ win: $(SRC) $(DEPS)
 	         $(WINLDFLAGS) -o bad_apple.exe $(SRC) \
 	         -lkernel32 -static-libgcc -lgcc
 
-# Experimental: shaves a couple of KB of PE bookkeeping. These flags only
-# clear DllCharacteristics bits and drop .reloc, which an EXE with a fixed
-# ImageBase does not need, so they are far less risky than a sub-page
-# section alignment. Still: test the result in the VM before relying on it.
 win-small: $(SRC) $(DEPS)
 	$(WINCC) $(WINCFLAGS) -DNOLIBC -nostdlib -nostartfiles -mconsole \
 	         $(WINLDFLAGS) -Wl,--file-alignment=512 \
