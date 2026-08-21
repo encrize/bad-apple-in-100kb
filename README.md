@@ -66,9 +66,6 @@ just destroy literal context:
 | per-frame RLE | 113 920 | +26% |
 | bzip2 instead of LZMA | 166 970 | +85% |
 
-The payload is at its entropy floor. Below this, the only lever is the video
-itself.
-
 ## Trading quality for size
 
 ```sh
@@ -87,62 +84,6 @@ python3 tools/reencode.py src/video_data.h --fps 12 --out src/video_data.h
 
 Add ~3 KB of code to any payload to get the binary size. To start from a video
 file instead, use `tools/convert.py input.mp4 --fps 15`.
-
-## Windows notes
-
-One executable covers XP through 11, because the renderer is chosen at runtime
-rather than at compile time:
-
-```c
-if (SetConsoleMode(h, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING))
-        g_vt = 1;   /* Windows 10 1511+: ANSI, one WriteFile per frame */
-/* otherwise: XP, WriteConsoleOutputCharacterA straight into the buffer */
-```
-
-The build is freestanding: `-nostdlib`, a hand-written `mainCRTStartup`, and
-`kernel32.dll` as the only import. This is not just for size — a UCRT-based
-MinGW would otherwise emit `api-ms-win-crt-*.dll` imports, which do not exist
-before Windows 10.
-
-```sh
-i686-w64-mingw32-objdump -p bad_apple.exe | grep 'DLL Name'
-# DLL Name: KERNEL32.dll     <- this line and nothing else
-```
-
-Other XP-specific details: the console window is shrunk *before* the buffer (a
-buffer may never be smaller than its window), `timeBeginPeriod(1)` is loaded
-dynamically from `winmm.dll` to fix the ~15.6 ms `Sleep` granularity, and
-timing uses `GetTickCount` so no 64-bit division pulls in libgcc.
-
-**Do not add `-Wl,--section-alignment=512`.** It looks like free space, but ld
-emits an inconsistent header for sub-page alignment and Windows rejects the
-image with `is not a valid Win32 application` — the same message it shows for
-a 64-bit exe, which makes it easy to misdiagnose. `make win-small` keeps the
-safe part of that idea (dropping `.reloc` and the NX/ASLR bits) for ~2 KB.
-
-## Running it in a VM
-
-`tools/make_iso.py` is a small pure-Python ISO-9660 writer, so no `xorriso` or
-`genisoimage` is needed:
-
-```sh
-make iso
-```
-
-Attach it to QEMU as a second CD drive:
-
-```sh
-qemu-system-x86_64 -enable-kvm -m 1024 \
-  -drive file=disk.qcow2,format=qcow2,if=ide,index=0 \
-  -drive file=badapple.iso,media=cdrom,index=3
-```
-
-Or swap the disc without restarting the VM, from the QEMU monitor
-(`Ctrl+Alt+2`):
-
-```
-change ide1-cd0 /path/to/badapple.iso raw
-```
 
 ## Layout
 
